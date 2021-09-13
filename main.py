@@ -80,7 +80,7 @@ class ExpConfig(Config):
     get_score_on_dim = False  # whether to get score on dim. If `True`, the score will be a 2-dim ndarray
     save_dir = 'model'
     restore_dir = None  # If not None, restore variables from this dir
-    result_dir = 'result'  # Where to save the result file
+    result_dir = 'result' + '_' + dataset  # Where to save the result file
     train_score_filename = 'train_score.pkl'
     test_score_filename = 'test_score.pkl'
 
@@ -198,23 +198,27 @@ def main():
 
 
 if __name__ == '__main__':
+    machines = ['machine-1-1','machine-1-2','machine-1-3','machine-1-4','machine-1-5','machine-1-6','machine-1-7','machine-1-8']
+    for machine in machines:
+      print(10*'-', ' Machine: ', machine)
+      # get config obj
+      config = ExpConfig()
+      config.dataset = machine
+      config.result_dir = 'result' + '_' + machine
 
-    # get config obj
-    config = ExpConfig()
+      # parse the arguments
+      arg_parser = ArgumentParser()
+      register_config_arguments(config, arg_parser)
+      arg_parser.parse_args(sys.argv[1:])
+      config.x_dim = get_data_dim(config.dataset)
 
-    # parse the arguments
-    arg_parser = ArgumentParser()
-    register_config_arguments(config, arg_parser)
-    arg_parser.parse_args(sys.argv[1:])
-    config.x_dim = get_data_dim(config.dataset)
+      print_with_title('Configurations', pformat(config.to_dict()), after='\n')
 
-    print_with_title('Configurations', pformat(config.to_dict()), after='\n')
-
-    # open the result object and prepare for result directories if specified
-    results = MLResults(config.result_dir)
-    results.save_config(config)  # save experiment settings for review
-    results.make_dirs(config.save_dir, exist_ok=True)
-    with warnings.catch_warnings():
-        # suppress DeprecationWarning from NumPy caused by codes in TensorFlow-Probability
-        warnings.filterwarnings("ignore", category=DeprecationWarning, module='numpy')
-        main()
+      # open the result object and prepare for result directories if specified
+      results = MLResults(config.result_dir)
+      results.save_config(config)  # save experiment settings for review
+      results.make_dirs(config.save_dir, exist_ok=True)
+      with warnings.catch_warnings():
+          # suppress DeprecationWarning from NumPy caused by codes in TensorFlow-Probability
+          warnings.filterwarnings("ignore", category=DeprecationWarning, module='numpy')
+          main()

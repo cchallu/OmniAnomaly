@@ -45,7 +45,7 @@ class ExpConfig(Config):
     n_intervals = 5
     occlusion_prob = 0.5
 
-    x_dim = get_data_dim(dataset)
+    x_dim = 38 #get_data_dim(dataset)
 
     # model architecture configuration
     use_connected_z_q = True
@@ -101,7 +101,7 @@ class ExpConfig(Config):
     get_score_on_dim = False  # whether to get score on dim. If `True`, the score will be a 2-dim ndarray
     save_dir = 'model'
     restore_dir = None  # If not None, restore variables from this dir
-    result_dir = 'results/' + dataset  # Where to save the result file
+    result_dir = 'results'  # Where to save the result file
     train_score_filename = 'train_score.pkl'
     test_score_filename = 'test_score.pkl'
 
@@ -246,6 +246,7 @@ if __name__ == '__main__':
     register_config_arguments(config, arg_parser)
     arg_parser.parse_args(sys.argv[1:])
     config.x_dim = get_data_dim(config.dataset)
+    config.result_dir = 'results/' + config.dataset
 
     print_with_title('Configurations', pformat(config.to_dict()), after='\n')
 

@@ -41,7 +41,7 @@ def get_random_occlusion_mask(dataset, n_intervals, occlusion_prob):
 
 class ExpConfig(Config):
     # dataset configuration
-    dataset = "machine-1-1"
+    dataset = None
     n_intervals = 5
     occlusion_prob = 0.5
 
@@ -131,6 +131,7 @@ def main():
     
     # construct the model under `variable_scope` named 'model'
     with tf.variable_scope('model') as model_vs:
+        print(10*'-', ' Machine: ', config.dataset)
         model = OmniAnomaly(config=config, name="model")
 
         # construct the trainer

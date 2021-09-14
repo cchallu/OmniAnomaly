@@ -20,10 +20,31 @@ from omni_anomaly.prediction import Predictor
 from omni_anomaly.training import Trainer
 from omni_anomaly.utils import get_data_dim, get_data, save_z
 
+def get_random_occlusion_mask(dataset, n_intervals, occlusion_prob):
+    len_dataset, n_features = dataset.shape
+
+    interval_size = int(np.ceil(len_dataset/n_intervals))
+    mask = np.ones(dataset.shape)
+    for i in range(n_intervals):
+        u = np.random.rand(n_features)
+        mask_interval = (u>occlusion_prob)*1
+        mask[i*interval_size:(i+1)*interval_size, :] = mask[i*interval_size:(i+1)*interval_size, :]*mask_interval
+
+    # Add one random interval for complete missing features 
+    feature_sum = mask.sum(axis=0)
+    missing_features = np.where(feature_sum==0)[0]
+    for feature in missing_features:
+        i = np.random.randint(0, n_intervals)
+        mask[i*interval_size:(i+1)*interval_size, feature] = 1
+
+    return mask
 
 class ExpConfig(Config):
     # dataset configuration
     dataset = "machine-1-1"
+    n_intervals = 5
+    occlusion_prob = 0.5
+
     x_dim = get_data_dim(dataset)
 
     # model architecture configuration
@@ -80,7 +101,7 @@ class ExpConfig(Config):
     get_score_on_dim = False  # whether to get score on dim. If `True`, the score will be a 2-dim ndarray
     save_dir = 'model'
     restore_dir = None  # If not None, restore variables from this dir
-    result_dir = 'result' + '_' + dataset  # Where to save the result file
+    result_dir = 'results/' + dataset  # Where to save the result file
     train_score_filename = 'train_score.pkl'
     test_score_filename = 'test_score.pkl'
 
@@ -96,6 +117,18 @@ def main():
         get_data(config.dataset, config.max_train_size, config.max_test_size, train_start=config.train_start,
                  test_start=config.test_start)
 
+    if config.occlusion_prob > 0:
+        mask_filename = config.result_dir + '/train_mask.pkl'
+        if os.path.exists(mask_filename):
+            print('Reading mask')
+            mask = pickle.load(open(mask_filename,'rb'))
+        else:
+            print('Creating mask')
+            mask = get_random_occlusion_mask(x_train, config.n_intervals, config.occlusion_prob)
+            with open(mask_filename,'wb') as f:
+                pickle.dump(mask, f)
+        x_train = x_train * mask
+    
     # construct the model under `variable_scope` named 'model'
     with tf.variable_scope('model') as model_vs:
         model = OmniAnomaly(config=config, name="model")
@@ -198,27 +231,30 @@ def main():
 
 
 if __name__ == '__main__':
-    machines = ['machine-1-1','machine-1-2','machine-1-3','machine-1-4','machine-1-5','machine-1-6','machine-1-7','machine-1-8']
-    for machine in machines:
-      print(10*'-', ' Machine: ', machine)
-      # get config obj
-      config = ExpConfig()
-      config.dataset = machine
-      config.result_dir = 'result' + '_' + machine
+    #machines = ['machine-1-1','machine-1-2','machine-1-3','machine-1-4','machine-1-5','machine-1-6','machine-1-7','machine-1-8']
+    #for machine in machines:
+    #print(10*'-', ' Machine: ', machine)
+    
+    # get config obj
+    config = ExpConfig()
+    #config.dataset = machine
+    #config.result_dir = 'result' + '_' + machine
 
-      # parse the arguments
-      arg_parser = ArgumentParser()
-      register_config_arguments(config, arg_parser)
-      arg_parser.parse_args(sys.argv[1:])
-      config.x_dim = get_data_dim(config.dataset)
+    # parse the arguments
+    arg_parser = ArgumentParser()
+    register_config_arguments(config, arg_parser)
+    arg_parser.parse_args(sys.argv[1:])
+    config.x_dim = get_data_dim(config.dataset)
 
-      print_with_title('Configurations', pformat(config.to_dict()), after='\n')
+    print_with_title('Configurations', pformat(config.to_dict()), after='\n')
 
-      # open the result object and prepare for result directories if specified
-      results = MLResults(config.result_dir)
-      results.save_config(config)  # save experiment settings for review
-      results.make_dirs(config.save_dir, exist_ok=True)
-      with warnings.catch_warnings():
-          # suppress DeprecationWarning from NumPy caused by codes in TensorFlow-Probability
-          warnings.filterwarnings("ignore", category=DeprecationWarning, module='numpy')
-          main()
+    # open the result object and prepare for result directories if specified
+    results = MLResults(config.result_dir)
+    results.save_config(config)  # save experiment settings for review
+    results.make_dirs(config.save_dir, exist_ok=True)
+    with warnings.catch_warnings():
+        # suppress DeprecationWarning from NumPy caused by codes in TensorFlow-Probability
+        warnings.filterwarnings("ignore", category=DeprecationWarning, module='numpy')
+        main()
+
+# CUDA_VISIBLE_DEVICES=0 python main.py --occlusion_prob=0.5 --n_intervals=5

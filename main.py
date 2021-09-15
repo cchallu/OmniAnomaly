@@ -246,7 +246,7 @@ if __name__ == '__main__':
     register_config_arguments(config, arg_parser)
     arg_parser.parse_args(sys.argv[1:])
     config.x_dim = get_data_dim(config.dataset)
-    config.result_dir = 'results/' + config.dataset
+    config.result_dir = 'results/' + config.dataset + '_' + config.occlusion_prob
 
     print_with_title('Configurations', pformat(config.to_dict()), after='\n')
 

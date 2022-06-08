@@ -14,11 +14,15 @@ from tfsnippet.examples.utils import MLResults, print_with_title
 from tfsnippet.scaffold import VariableSaver
 from tfsnippet.utils import get_variables_as_dict, register_config_arguments, Config
 
-from omni_anomaly.eval_methods import pot_eval, bf_search
+from omni_anomaly.eval_methods import pot_eval, bf_search, calc_point2point, adjust_predicts
 from omni_anomaly.model import OmniAnomaly
 from omni_anomaly.prediction import Predictor
 from omni_anomaly.training import Trainer
 from omni_anomaly.utils import get_data_dim, get_data, save_z
+
+from saat.thresholds.saat import AutomaticThreshold
+
+import matplotlib.pyplot as plt
 
 def get_random_occlusion_mask(dataset, n_intervals, occlusion_prob):
     len_dataset, n_features = dataset.shape
@@ -43,7 +47,7 @@ class ExpConfig(Config):
     # dataset configuration
     dataset = None
     n_intervals = 5
-    occlusion_prob = 0.5
+    occlusion_prob = 0
 
     x_dim = 38 #get_data_dim(dataset)
 
@@ -103,7 +107,9 @@ class ExpConfig(Config):
     restore_dir = None  # If not None, restore variables from this dir
     result_dir = 'results'  # Where to save the result file
     train_score_filename = 'train_score.pkl'
+    synthetic_score_filename = 'synthetic_score.pkl'
     test_score_filename = 'test_score.pkl'
+    predicts = 'predicts.pkl'
 
 
 def main():
@@ -128,6 +134,12 @@ def main():
             with open(mask_filename,'wb') as f:
                 pickle.dump(mask, f)
         x_train = x_train * mask
+
+    # synthetic anomalies
+    auto_threshold = AutomaticThreshold(anomaly_type='contextual', window_size=64*10, scale=1, anomaly_propensity=0.1, correlation_scaling=5)
+    synthetic_train, anomaly_size  = auto_threshold.inject_anomalies(data=x_train.T, repeats=1)
+    anomaly_size = anomaly_size[0].mean(axis=0)
+    synthetic_train = synthetic_train[0].T
     
     # construct the model under `variable_scope` named 'model'
     with tf.variable_scope('model') as model_vs:
@@ -176,6 +188,23 @@ def main():
             if config.save_z:
                 save_z(train_z, 'train_z')
 
+            # get score of synthetic set for SAAT algorithm
+            synthetic_score, synthetic_z, synthetic_pred_speed = predictor.get_score(synthetic_train)
+            if config.synthetic_score_filename is not None:
+                with open(os.path.join(config.result_dir, config.synthetic_score_filename), 'wb') as file:
+                    pickle.dump(synthetic_score, file)
+
+            anomaly_size = anomaly_size[-len(synthetic_score):]
+
+            quantile_threshold = auto_threshold.compute_quantile_threshold(scores=synthetic_score,
+                                                                           q=0.05)
+            best_f1_threshold, estimated_f1 = auto_threshold.compute_best_F1_threshold(scores=-synthetic_score, #anomaly = score > th
+                                                                                       anomaly_size=anomaly_size,
+                                                                                       tolerance=0.1,
+                                                                                       n_splits=100,
+                                                                                       segment_adjust=True)
+            best_f1_threshold = -best_f1_threshold
+
             if x_test is not None:
                 # get score of test set
                 test_start = time.time()
@@ -204,12 +233,21 @@ def main():
                                       step_num=int(abs(config.bf_search_max - config.bf_search_min) /
                                                    config.bf_search_step_size),
                                       display_freq=50)
+
+                    best_f1_pred, _ = adjust_predicts(test_score, y_test[-len(test_score):], th, calc_latency=True)
+
                     # get pot results
-                    pot_result = pot_eval(train_score, test_score, y_test[-len(test_score):], level=config.level)
+                    pot_result, pot_pred = pot_eval(train_score, test_score, y_test[-len(test_score):], level=config.level)
+
+                    # get SAAT results
+                    saat_q_pred, _ = adjust_predicts(test_score, y_test[-len(test_score):], quantile_threshold, calc_latency=True)
+                    saat_q_f1 = calc_point2point(saat_q_pred, y_test[-len(test_score):])
+
+                    saat_f1_pred, _ = adjust_predicts(test_score, y_test[-len(test_score):], best_f1_threshold, calc_latency=True)
+                    saat_f1_f1 = calc_point2point(saat_f1_pred, y_test[-len(test_score):])
 
                     # output the results
                     best_valid_metrics.update({
-                        'best-f1': t[0],
                         'precision': t[1],
                         'recall': t[2],
                         'TP': t[3],
@@ -217,10 +255,37 @@ def main():
                         'FP': t[5],
                         'FN': t[6],
                         'latency': t[-1],
-                        'threshold': th
+                        'threshold': th,
+                        'saat_q_threshold': quantile_threshold,
+                        'saat_f1_threshold': best_f1_threshold,
+                        'best-f1': t[0],
+                        'saat_q_f1': saat_q_f1[0],
+                        'saat_f1_f1': saat_f1_f1[0],
                     })
                     best_valid_metrics.update(pot_result)
                 results.update_metrics(best_valid_metrics)
+
+                # Save predicts (for overall metric)
+                predicts = {'best_f1_pred': best_f1_pred,
+                            'pot_pred': pot_pred,
+                            'saat_q_pred': saat_q_pred,
+                            'saat_f1_pred': saat_f1_pred,}
+
+                if config.predicts is not None:
+                    with open(os.path.join(config.result_dir, config.predicts), 'wb') as file:
+                        pickle.dump(predicts, file)
+
+                plt.figure(figsize=(20,8))
+                plt.plot(-train_score)
+                plt.plot(range(len(train_score), len(train_score)+len(test_score)), -test_score)
+                plt.axhline(-quantile_threshold, c='blue', label='SAAT-Q threshold')
+                plt.axhline(-best_f1_threshold, c='red', label='SAAT-F1 threshold')
+                plt.axhline(-pot_result['pot-threshold'], c='black', label='POT')
+                plt.axhline(-th, c='green', label='Optimal threshold')
+                plt.legend()
+                plt.tight_layout()
+                plt.savefig(f'{config.result_dir}/thresholds.png')
+                plt.close()
 
             if config.save_dir is not None:
                 # save the variables
@@ -232,21 +297,16 @@ def main():
 
 
 if __name__ == '__main__':
-    #machines = ['machine-1-1','machine-1-2','machine-1-3','machine-1-4','machine-1-5','machine-1-6','machine-1-7','machine-1-8']
-    #for machine in machines:
-    #print(10*'-', ' Machine: ', machine)
-    
+
     # get config obj
     config = ExpConfig()
-    #config.dataset = machine
-    #config.result_dir = 'result' + '_' + machine
 
     # parse the arguments
     arg_parser = ArgumentParser()
     register_config_arguments(config, arg_parser)
     arg_parser.parse_args(sys.argv[1:])
     config.x_dim = get_data_dim(config.dataset)
-    config.result_dir = 'results/' + config.dataset + '_' + str(config.occlusion_prob)
+    config.result_dir = 'results/' + config.dataset
 
     print_with_title('Configurations', pformat(config.to_dict()), after='\n')
 
